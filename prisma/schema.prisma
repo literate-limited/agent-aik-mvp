@@ -1,0 +1,254 @@
+// Agent Aik - Database Schema
+// PostgreSQL with Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth & Multi-tenancy ───────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  memberships   WorkspaceMember[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  plan      Plan     @default(STANDARD)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members    WorkspaceMember[]
+  agents     Agent[]
+  workflows  Workflow[]
+  apiKeys    ApiKey[]
+  executions Execution[]
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  role        MemberRole    @default(MEMBER)
+  userId      String
+  workspaceId String
+  createdAt   DateTime      @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum Plan {
+  STANDARD
+  PREMIUM
+  ENTERPRISE
+}
+
+// ─── API Keys ───────────────────────────────────────────────────
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  name        String
+  keyHash     String    @unique
+  keyPrefix   String    // First 8 chars for display
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  workspaceId String
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// ─── Agents ─────────────────────────────────────────────────────
+
+model Agent {
+  id           String      @id @default(cuid())
+  name         String
+  description  String?
+  systemPrompt String      @db.Text
+  model        String      @default("claude-sonnet-4-20250514")
+  status       AgentStatus @default(ACTIVE)
+  config       Json        @default("{}")
+  tools        Json        @default("[]")
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  workspaceId  String
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  executions Execution[]
+  workflowSteps WorkflowStep[]
+
+  @@index([workspaceId])
+}
+
+enum AgentStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+// ─── Workflows ──────────────────────────────────────────────────
+
+model Workflow {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  status      WorkflowStatus @default(DRAFT)
+  trigger     Json           @default("{}")
+  config      Json           @default("{}")
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  workspaceId String
+
+  workspace  Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  steps      WorkflowStep[]
+  executions Execution[]
+
+  @@index([workspaceId])
+}
+
+enum WorkflowStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+model WorkflowStep {
+  id         String @id @default(cuid())
+  name       String
+  type       StepType
+  config     Json   @default("{}")
+  position   Json   @default("{\"x\": 0, \"y\": 0}")
+  order      Int    @default(0)
+  workflowId String
+  agentId    String?
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  agent    Agent?   @relation(fields: [agentId], references: [id])
+
+  @@index([workflowId])
+}
+
+enum StepType {
+  AGENT
+  CONDITION
+  TRANSFORM
+  HTTP_REQUEST
+  DELAY
+  OUTPUT
+}
+
+// ─── Executions ─────────────────────────────────────────────────
+
+model Execution {
+  id          String          @id @default(cuid())
+  status      ExecutionStatus @default(PENDING)
+  input       Json            @default("{}")
+  output      Json?
+  error       String?
+  tokensUsed  Int             @default(0)
+  costCents   Int             @default(0)
+  durationMs  Int?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+  workspaceId String
+  agentId     String?
+  workflowId  String?
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agent     Agent?         @relation(fields: [agentId], references: [id])
+  workflow  Workflow?      @relation(fields: [workflowId], references: [id])
+  logs      ExecutionLog[]
+
+  @@index([workspaceId])
+  @@index([agentId])
+  @@index([workflowId])
+}
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model ExecutionLog {
+  id          String   @id @default(cuid())
+  level       LogLevel @default(INFO)
+  message     String   @db.Text
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  executionId String
+
+  execution Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId])
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
